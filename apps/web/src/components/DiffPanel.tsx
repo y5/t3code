@@ -66,6 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useDebouncedValue, VCS_REF_SEARCH_DEBOUNCE_MS } from "../state/queries";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
@@ -201,6 +202,9 @@ export default function DiffPanel({
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [baseRefQuery, setBaseRefQuery] = useState("");
+  // Local filtering stays on the raw value so the list reacts instantly; only
+  // the server-backed ref atoms are debounced.
+  const debouncedBaseRefQuery = useDebouncedValue(baseRefQuery, VCS_REF_SEARCH_DEBOUNCE_MS);
   const [collapsedDiffFiles, setCollapsedDiffFiles] = useState<CollapsedDiffFilesState>(() => ({
     scopeKey: null,
     fileKeys: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
@@ -374,7 +378,9 @@ export default function DiffPanel({
             cwd: branchDiffPreview.data.cwd,
             includeMatchingRemoteRefs: true,
             refKind: "local",
-            ...(baseRefQuery.trim().length > 0 ? { query: baseRefQuery.trim() } : {}),
+            ...(debouncedBaseRefQuery.trim().length > 0
+              ? { query: debouncedBaseRefQuery.trim() }
+              : {}),
             limit: 100,
           },
         })
@@ -391,7 +397,9 @@ export default function DiffPanel({
             cwd: branchDiffPreview.data.cwd,
             includeMatchingRemoteRefs: true,
             refKind: "remote",
-            ...(baseRefQuery.trim().length > 0 ? { query: baseRefQuery.trim() } : {}),
+            ...(debouncedBaseRefQuery.trim().length > 0
+              ? { query: debouncedBaseRefQuery.trim() }
+              : {}),
             limit: 100,
           },
         })

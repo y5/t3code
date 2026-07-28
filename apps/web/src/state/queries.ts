@@ -27,6 +27,12 @@ import { vcsEnvironment } from "./vcs";
 const COMPOSER_PATH_SEARCH_DEBOUNCE_MS = 120;
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
 const VCS_REF_LIST_LIMIT = 100;
+/**
+ * Every distinct ref query becomes its own atom, so an undebounced search box
+ * turns one lookup into one background atom per keystroke. Debounce before the
+ * query reaches the atom family, not just before render.
+ */
+export const VCS_REF_SEARCH_DEBOUNCE_MS = 150;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 
@@ -37,7 +43,7 @@ export interface ThreadDetailView {
   readonly isDeleted: boolean;
 }
 
-function useDebouncedValue<A>(value: A, delayMs: number): A {
+export function useDebouncedValue<A>(value: A, delayMs: number): A {
   const [debounced, setDebounced] = useState(value);
 
   useEffect(() => {
@@ -66,7 +72,7 @@ export function useThreadDetail(
 }
 
 export function useBranches(target: VcsRefTarget) {
-  const query = target.query?.trim() ?? "";
+  const query = useDebouncedValue(target.query?.trim() ?? "", VCS_REF_SEARCH_DEBOUNCE_MS);
   return useEnvironmentQuery(
     target.environmentId !== null && target.cwd !== null
       ? vcsEnvironment.listRefs({
@@ -82,7 +88,7 @@ export function useBranches(target: VcsRefTarget) {
 }
 
 export function usePaginatedBranches(target: VcsRefTarget) {
-  const query = target.query?.trim() ?? "";
+  const query = useDebouncedValue(target.query?.trim() ?? "", VCS_REF_SEARCH_DEBOUNCE_MS);
   const targetKey =
     target.environmentId !== null && target.cwd !== null
       ? JSON.stringify([target.environmentId, target.cwd, query])

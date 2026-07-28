@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Data from "effect/Data";
@@ -39,6 +41,16 @@ import { ServerConfig } from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+/**
+ * Ceiling on git subprocesses in flight across the whole driver. Individual
+ * operations fan out freely (`listRefs` alone spawns five), so without a shared
+ * bound a client that repeats an operation can push the box into hundreds of
+ * concurrent processes, at which point commands that normally take a
+ * millisecond exhaust their timeouts purely from contention. Waiting for a
+ * permit is not part of a command's timeout budget — queueing must slow work
+ * down, never fail it.
+ */
+export const MAX_CONCURRENT_GIT_COMMANDS = Math.min(16, Math.max(4, NodeOS.availableParallelism()));
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
@@ -700,6 +712,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const gitCommandSemaphore = yield* Semaphore.make(MAX_CONCURRENT_GIT_COMMANDS);
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -808,22 +821,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
 
-      return yield* runGitCommand().pipe(
-        Effect.scoped,
-        Effect.timeoutOption(timeoutMs),
-        Effect.flatMap((result) =>
-          Option.match(result, {
-            onNone: () =>
-              Effect.fail(
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Git command timed out.",
-                }),
-              ),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
+      // The permit is acquired outside the timeout so that queue wait never
+      // counts against a command's budget; only real execution time does.
+      return yield* gitCommandSemaphore
+        .withPermit(runGitCommand().pipe(Effect.scoped, Effect.timeoutOption(timeoutMs)))
+        .pipe(
+          Effect.flatMap((result) =>
+            Option.match(result, {
+              onNone: () =>
+                Effect.fail(
+                  new GitCommandError({
+                    ...gitCommandContext(commandInput),
+                    detail: "Git command timed out.",
+                  }),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
     },
   );
 

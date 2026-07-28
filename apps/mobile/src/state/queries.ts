@@ -16,6 +16,8 @@ import {
 const COMPOSER_PATH_SEARCH_DEBOUNCE_MS = 200;
 const COMPOSER_PATH_SEARCH_LIMIT = 20;
 const VCS_REF_LIST_LIMIT = 100;
+/** Each distinct ref query becomes its own atom; debounce before it gets one. */
+const VCS_REF_SEARCH_DEBOUNCE_MS = 150;
 
 export interface ThreadDetailView {
   readonly data: OrchestrationThread | null;
@@ -63,7 +65,7 @@ export function useBranches(input: {
   readonly cwd: string | null;
   readonly query?: string | null;
 }) {
-  const query = input.query?.trim() ?? "";
+  const query = useDebouncedValue(input.query?.trim() ?? "", VCS_REF_SEARCH_DEBOUNCE_MS);
   return useEnvironmentQuery(
     input.environmentId !== null && input.cwd !== null
       ? vcsEnvironment.listRefs({

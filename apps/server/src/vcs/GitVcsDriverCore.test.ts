@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -16,7 +17,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  makeGitVcsDriverCore,
+  MAX_CONCURRENT_GIT_COMMANDS,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -151,6 +156,113 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
       { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
     ]);
   }).pipe(Effect.provide(layer));
+});
+
+describe("git subprocess concurrency bound", () => {
+  const makeBlockingSpawnerLayer = (release: Deferred.Deferred<void, never>) => {
+    const state = { inFlight: 0, maxInFlight: 0 };
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.sync(() => {
+        state.inFlight += 1;
+        state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Deferred.await(release).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                state.inFlight -= 1;
+              }),
+            ),
+            Effect.as(ChildProcessSpawner.ExitCode(0)),
+          ),
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      }),
+    );
+    const layer = GitVcsDriver.layer.pipe(
+      Layer.provide(ServerConfigLayer),
+      Layer.provideMerge(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+    return { state, layer };
+  };
+
+  const execute = (timeoutMs: number) =>
+    Effect.gen(function* () {
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      return yield* driver.execute({
+        operation: "GitVcsDriver.test.concurrency",
+        cwd: "/repo",
+        args: ["status"],
+        timeoutMs,
+      });
+    });
+
+  // Live clock: these assertions depend on fibers actually reaching their
+  // blocking points, which virtual time never advances toward.
+  it.live("never runs more git subprocesses than the shared permit count", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void, never>();
+        const { state, layer } = makeBlockingSpawnerLayer(release);
+        const oversubscribed = MAX_CONCURRENT_GIT_COMMANDS + 8;
+
+        yield* Effect.gen(function* () {
+          const running = yield* Effect.all(
+            Array.from({ length: oversubscribed }, () => execute(30_000)),
+            { concurrency: "unbounded" },
+          ).pipe(Effect.forkScoped);
+
+          yield* Effect.sleep(Duration.millis(150));
+          assert.equal(state.maxInFlight, MAX_CONCURRENT_GIT_COMMANDS);
+
+          yield* Deferred.succeed(release, undefined);
+          const results = yield* Fiber.join(running);
+          assert.equal(results.length, oversubscribed);
+          assert.equal(state.inFlight, 0);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+  );
+
+  it.live("does not spend a command's timeout budget waiting for a permit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void, never>();
+        const { state, layer } = makeBlockingSpawnerLayer(release);
+
+        yield* Effect.gen(function* () {
+          const saturating = yield* Effect.all(
+            Array.from({ length: MAX_CONCURRENT_GIT_COMMANDS }, () => execute(30_000)),
+            { concurrency: "unbounded" },
+          ).pipe(Effect.forkScoped);
+
+          yield* Effect.sleep(Duration.millis(50));
+          assert.equal(state.maxInFlight, MAX_CONCURRENT_GIT_COMMANDS);
+
+          const queued = yield* execute(50).pipe(Effect.forkScoped);
+          yield* Effect.sleep(Duration.millis(300));
+
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(saturating);
+          const result = yield* Fiber.join(queued);
+          assert.equal(result.exitCode, 0);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+  );
 });
 
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>

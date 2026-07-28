@@ -641,4 +641,67 @@ describe("cached VCS refs", () => {
       }),
     ),
   );
+
+  // Every distinct input gets its own atom, and each polling atom outlives the
+  // UI that created it. Polling search results therefore turns one typed query
+  // into a lasting fleet of background pollers against the same repository.
+  const expectsSingleFetch = (
+    name: string,
+    input: Parameters<typeof makeCachedVcsRefsChanges>[0],
+  ) =>
+    it.effect(name, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const calls = yield* Ref.make(0);
+          const client = {
+            [WS_METHODS.vcsListRefs]: () =>
+              Ref.updateAndGet(calls, (count) => count + 1).pipe(Effect.as(LIVE_REFS)),
+          } as unknown as WsRpcProtocolClient;
+          const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+            target: TARGET,
+            state: yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE),
+            session: yield* SubscriptionRef.make(Option.some(session(client))),
+            prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+            connect: Effect.void,
+            disconnect: Effect.void,
+            retryNow: Effect.void,
+          } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+
+          const fiber = yield* Effect.forkChild(
+            Stream.unwrap(
+              makeCachedVcsRefsChanges(input).pipe(
+                Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+                Effect.provideService(
+                  Persistence.EnvironmentCacheStore,
+                  cacheWithRefs(Option.none()),
+                ),
+              ),
+            ).pipe(Stream.runDrain),
+          );
+
+          for (let attempt = 0; attempt < 100 && (yield* Ref.get(calls)) < 1; attempt += 1) {
+            yield* Effect.yieldNow;
+          }
+          expect(yield* Ref.get(calls)).toBe(1);
+
+          // Well past several revalidation intervals.
+          yield* TestClock.adjust("30 seconds");
+          expect(yield* Ref.get(calls)).toBe(1);
+
+          yield* Fiber.interrupt(fiber);
+        }).pipe(Effect.provide(TestClock.layer())),
+      ),
+    );
+
+  expectsSingleFetch("resolves a filtered ref search once instead of polling it", {
+    cwd: "/repo",
+    query: "feat",
+    limit: 100,
+  });
+
+  expectsSingleFetch("resolves a paginated ref page once instead of polling it", {
+    cwd: "/repo",
+    cursor: 100,
+    limit: 100,
+  });
 });
