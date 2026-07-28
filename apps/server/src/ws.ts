@@ -69,6 +69,7 @@ import {
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { vcsListRefsTraceAttributes } from "./observability/Attributes.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -1736,6 +1737,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
             "rpc.aggregate": "vcs",
+            ...vcsListRefsTraceAttributes(input),
           }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(

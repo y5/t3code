@@ -24,6 +24,36 @@ export function compactMetricAttributes(
   );
 }
 
+/**
+ * Trace attributes identifying which ref lookup a request actually made.
+ *
+ * `rpc.method` alone cannot distinguish the canonical list for a repository
+ * from one of many search- or pagination-derived variants, and those variants
+ * are what multiply under a misbehaving client. Recording the shape makes that
+ * fan-out visible directly instead of leaving it to be inferred from timing.
+ *
+ * The query is text someone typed, so only its presence and length are
+ * recorded: enough to separate a search-derived call from a canonical one and
+ * to watch a per-keystroke fan-out grow, without putting the text itself into
+ * a trace file that gets copied around.
+ */
+export function vcsListRefsTraceAttributes(input: {
+  readonly cwd: string;
+  readonly query?: string | undefined;
+  readonly cursor?: number | undefined;
+  readonly refKind?: string | undefined;
+  readonly limit?: number | undefined;
+}): Readonly<Record<string, unknown>> {
+  return {
+    "vcs.cwd": input.cwd,
+    "vcs.has_query": input.query !== undefined,
+    ...(input.query === undefined ? {} : { "vcs.query_length": input.query.length }),
+    ...(input.cursor === undefined ? {} : { "vcs.cursor": input.cursor }),
+    ...(input.refKind === undefined ? {} : { "vcs.ref_kind": input.refKind }),
+    ...(input.limit === undefined ? {} : { "vcs.limit": input.limit }),
+  };
+}
+
 export function outcomeFromExit(exit: Exit.Exit<unknown, unknown>): ObservabilityOutcome {
   if (Exit.isSuccess(exit)) {
     return "success";
