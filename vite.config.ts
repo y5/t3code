@@ -22,7 +22,9 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // `--no-error-on-unmatched-pattern` keeps commits that only touch
+    // unformattable files (shell scripts, images) from failing the hook.
+    "*": "vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [
