@@ -11,6 +11,7 @@ import * as Electron from "electron";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
@@ -51,6 +52,7 @@ type DesktopWindowRuntimeServices =
   | DesktopEnvironment.DesktopEnvironment
   | DesktopAssets.DesktopAssets
   | DesktopAppSettings.DesktopAppSettings
+  | DesktopState.DesktopState
   | ElectronMenu.ElectronMenu
   | ElectronShell.ElectronShell
   | ElectronTheme.ElectronTheme
@@ -253,6 +255,7 @@ export const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const previewManager = yield* PreviewManager.PreviewManager;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const desktopState = yield* DesktopState.DesktopState;
   // Window-side latch for the primary backend's readiness. Set by
   // handleBackendReady (driven by the pool's onReady callback), cleared
   // by handleBackendNotReady (driven by onShutdown). Only consumed by
@@ -585,9 +588,9 @@ export const make = Effect.gen(function* () {
       developmentLoadRetryFiber = runFork(
         Effect.sleep(retryInMs).pipe(
           Effect.andThen(
-            Effect.sync(() => {
+            Effect.gen(function* () {
               developmentLoadRetryFiber = undefined;
-              if (!window.isDestroyed()) {
+              if (!(yield* Ref.get(desktopState.quitting)) && !window.isDestroyed()) {
                 loadApplication();
               }
             }),
@@ -656,6 +659,7 @@ export const make = Effect.gen(function* () {
           );
           const shouldRecover =
             recoverable &&
+            !(yield* Ref.get(desktopState.quitting)) &&
             !window.isDestroyed() &&
             rendererRecoveryTimestamps.length < RENDERER_RECOVERY_MAX_ATTEMPTS;
           yield* logWindowWarning("main window render process gone", {
@@ -668,7 +672,7 @@ export const make = Effect.gen(function* () {
           }
           rendererRecoveryTimestamps.push(now);
           yield* Effect.sleep(RENDERER_RECOVERY_RELOAD_DELAY_MS);
-          if (!window.isDestroyed()) {
+          if (!(yield* Ref.get(desktopState.quitting)) && !window.isDestroyed()) {
             loadApplication();
           }
         }),

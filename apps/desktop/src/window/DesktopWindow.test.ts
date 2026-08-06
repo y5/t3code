@@ -182,6 +182,7 @@ function makeTestLayer(input: {
   readonly desktopSettings?: DesktopAppSettings.DesktopSettings;
   readonly mainWindowBoundsUpdates?: DesktopAppSettings.DesktopWindowBounds[];
   readonly mainWindowMaximizedUpdates?: boolean[];
+  readonly desktopState?: DesktopState.DesktopState["Service"];
   readonly beforeMainWindowBoundsUpdate?: (
     bounds: DesktopAppSettings.DesktopWindowBounds,
   ) => Effect.Effect<void>;
@@ -240,6 +241,10 @@ function makeTestLayer(input: {
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
+  const desktopStateLayer = input.desktopState
+    ? Layer.succeed(DesktopState.DesktopState, input.desktopState)
+    : DesktopState.layer;
+
   return DesktopWindow.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -247,7 +252,7 @@ function makeTestLayer(input: {
         desktopEnvironmentLayer,
         desktopAppSettingsLayer,
         desktopServerExposureLayer,
-        DesktopState.layer,
+        desktopStateLayer,
         electronMenuLayer,
         Layer.succeed(ElectronShell.ElectronShell, {
           openExternal: (url) =>
@@ -346,6 +351,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
           desktopEnvironmentLayer,
           DesktopAppSettings.layerTest(),
           desktopServerExposureLayer,
+          DesktopState.layer,
           electronMenuLayer,
           Layer.succeed(ElectronShell.ElectronShell, {
             openExternal: () => Effect.succeed(true),
@@ -971,6 +977,40 @@ describe("DesktopWindow", () => {
         yield* TestClock.adjust(250);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
         assert.equal(fakeWindow.reload.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("does not reload the renderer after desktop shutdown begins", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const desktopState = {
+        backendReady: yield* Ref.make(false),
+        quitting: yield* Ref.make(false),
+      } satisfies DesktopState.DesktopState["Service"];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        desktopState,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const renderProcessGone = fakeWindow.webContentsListeners.get("render-process-gone");
+        if (!renderProcessGone) {
+          return yield* Effect.die("render-process-gone listener was not registered");
+        }
+
+        renderProcessGone({}, { reason: "oom", exitCode: -9 });
+        yield* Ref.set(desktopState.quitting, true);
+        yield* TestClock.adjust(500);
+
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
   );
