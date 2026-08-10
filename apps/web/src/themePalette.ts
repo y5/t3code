@@ -10,6 +10,8 @@ export const EMBER_THEME_ID = "ember" as const;
 export const EMBER_THEME_LABEL = "Ember";
 export const IRIS_THEME_ID = "iris" as const;
 export const IRIS_THEME_LABEL = "Iris";
+export const HYPR_THEME_ID = "hypr" as const;
+export const HYPR_THEME_LABEL = "Hypr";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
@@ -122,6 +124,7 @@ const RESERVED_THEME_IDS = new Set([
   OCEAN_THEME_ID,
   EMBER_THEME_ID,
   IRIS_THEME_ID,
+  HYPR_THEME_ID,
   LEGACY_T3_CHAT_DARK_THEME_ID,
   "t3-grove",
   "t3-ocean",
@@ -1384,12 +1387,37 @@ export const IRIS_THEME: ThemeDefinition = {
   },
 };
 
+/**
+ * The Hyprland desktop palette: a near-black canvas under periwinkle window
+ * borders, with the lock screen's warm sand as the companion action color.
+ * Built on the vivid generator rather than the managed one on purpose — the
+ * seeds are used exactly, so the app's canvas is the same color as the
+ * compositor's, and the surface ramp carries the accent hue the way the
+ * desktop's border gradient does instead of flattening to neutral grey.
+ */
+export const HYPR_THEME: ThemeDefinition = {
+  id: HYPR_THEME_ID,
+  label: HYPR_THEME_LABEL,
+  appearance: "light",
+  colors: {
+    ...createVividThemeColors("light", "#f4f4fb", "#494872"),
+    ...themeActionColors("#8a6a2f"),
+  },
+  variants: {
+    dark: {
+      ...createVividThemeColors("dark", "#0a0c0b", "#7a7bc2"),
+      ...themeActionColors("#c9aa7b"),
+    },
+  },
+};
+
 const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [
   T3_CHAT_THEME,
   GROVE_THEME,
   OCEAN_THEME,
   EMBER_THEME,
   IRIS_THEME,
+  HYPR_THEME,
 ];
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {

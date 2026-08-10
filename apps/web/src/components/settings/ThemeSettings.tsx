@@ -19,6 +19,7 @@ import {
   T3_CHAT_THEME,
   EMBER_THEME,
   GROVE_THEME,
+  HYPR_THEME,
   IRIS_THEME,
   OCEAN_THEME,
 } from "../../themePalette";
@@ -52,6 +53,7 @@ const MAINTAINER_THEMES: ReadonlyArray<ThemeDefinition> = [
   OCEAN_THEME,
   EMBER_THEME,
   IRIS_THEME,
+  HYPR_THEME,
 ];
 
 function downloadThemeFile(filename: string, contents: string): void {
