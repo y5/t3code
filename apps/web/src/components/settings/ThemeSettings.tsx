@@ -185,7 +185,7 @@ function ThemeLibraryCard({
                               onDownload();
                             }}
                           >
-                            <DownloadIcon />
+                            <UploadIcon />
                           </Button>
                         }
                       />
@@ -572,7 +572,7 @@ export function ThemeLibrary({
             Create theme
           </Button>
           <Button size="xs" variant="outline" onClick={() => onImportOpenChange(true)}>
-            <UploadIcon />
+            <DownloadIcon />
             Import theme
           </Button>
         </div>
