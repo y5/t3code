@@ -1,8 +1,10 @@
 import {
+  type EnvironmentId,
   type FilesystemBrowseEntry,
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
+import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -11,7 +13,6 @@ import { sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
-export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
@@ -160,6 +161,33 @@ export type BuildThreadActionItemsThread = Pick<
   latestUserMessageAt?: string | null;
 };
 
+export function filterOpenCommandPaletteThreads<TThread extends SidebarThreadSummary>(input: {
+  threads: ReadonlyArray<TThread>;
+  snoozeNow: string;
+  settlementNow: string;
+  autoSettleAfterDays: number | null;
+  supportsSettlement: (environmentId: EnvironmentId) => boolean;
+  supportsSnooze: (environmentId: EnvironmentId) => boolean;
+}): TThread[] {
+  return input.threads.filter((thread) => {
+    if (thread.archivedAt !== null) return false;
+    if (
+      input.supportsSnooze(thread.environmentId) &&
+      effectiveSnoozed(thread, { now: input.snoozeNow })
+    ) {
+      return false;
+    }
+    if (thread.pinnedAt != null) return true;
+    return !(
+      input.supportsSettlement(thread.environmentId) &&
+      effectiveSettled(thread, {
+        now: input.settlementNow,
+        autoSettleAfterDays: input.autoSettleAfterDays,
+      })
+    );
+  });
+}
+
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {
   threads: ReadonlyArray<TThread>;
   activeThreadId?: Thread["id"];
@@ -265,7 +293,6 @@ export function filterCommandPaletteGroups(input: {
   activeGroups: ReadonlyArray<CommandPaletteGroup>;
   query: string;
   isInSubmenu: boolean;
-  projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
 }): CommandPaletteGroup[] {
   const isActionsFilter = input.query.startsWith(">");
@@ -283,22 +310,15 @@ export function filterCommandPaletteGroups(input: {
   if (isActionsFilter) {
     baseGroups = baseGroups.filter((group) => group.value === "actions");
   } else if (!input.isInSubmenu) {
-    baseGroups = baseGroups.filter((group) => group.value !== "recent-threads");
+    baseGroups = baseGroups.filter((group) => group.value !== "open-threads");
   }
 
   const searchableGroups = [...baseGroups];
   if (!input.isInSubmenu && !isActionsFilter) {
-    if (input.projectSearchItems.length > 0) {
-      searchableGroups.push({
-        value: "projects-search",
-        label: "Projects",
-        items: input.projectSearchItems,
-      });
-    }
     if (input.threadSearchItems.length > 0) {
       searchableGroups.push({
         value: "threads-search",
-        label: "Threads",
+        label: "Open Threads",
         items: input.threadSearchItems,
       });
     }
@@ -382,17 +402,17 @@ export function getCommandPaletteMode(input: {
 
 export function buildRootGroups(input: {
   actionItems: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
-  recentThreadItems: ReadonlyArray<CommandPaletteActionItem>;
+  openThreadItems: ReadonlyArray<CommandPaletteActionItem>;
 }): CommandPaletteGroup[] {
   const groups: CommandPaletteGroup[] = [];
   if (input.actionItems.length > 0) {
     groups.push({ value: "actions", label: "Actions", items: input.actionItems });
   }
-  if (input.recentThreadItems.length > 0) {
+  if (input.openThreadItems.length > 0) {
     groups.push({
-      value: "recent-threads",
-      label: "Recent Threads",
-      items: input.recentThreadItems,
+      value: "open-threads",
+      label: "Open Threads",
+      items: input.openThreadItems,
     });
   }
   return groups;
@@ -401,7 +421,7 @@ export function buildRootGroups(input: {
 export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): string {
   switch (mode) {
     case "root":
-      return "Search commands, projects, and threads...";
+      return "Search open threads...";
     case "root-browse":
       return "Enter project path (e.g. ~/projects/my-app)";
     case "submenu":

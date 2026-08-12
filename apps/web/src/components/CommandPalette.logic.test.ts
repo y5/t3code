@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
+import type { SidebarThreadSummary } from "../types";
 import {
   buildBrowseGroups,
+  buildRootGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
+  filterOpenCommandPaletteThreads,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
@@ -138,6 +141,158 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   };
 }
 
+function makeThreadShell(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
+  return {
+    id: ThreadId.make("thread-1"),
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    projectId: PROJECT_ID,
+    title: "Thread",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    session: null,
+    latestUserMessageAt: "2026-03-24T00:00:00.000Z",
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
+}
+
+describe("filterOpenCommandPaletteThreads", () => {
+  it("keeps active and pinned threads while excluding inactive lifecycle states", () => {
+    const threads = filterOpenCommandPaletteThreads({
+      threads: [
+        makeThreadShell({ id: ThreadId.make("thread-active") }),
+        makeThreadShell({
+          id: ThreadId.make("thread-pinned"),
+          pinnedAt: "2026-03-20T00:00:00.000Z",
+          settledOverride: "settled",
+          settledAt: "2026-03-20T00:00:00.000Z",
+        }),
+        makeThreadShell({
+          id: ThreadId.make("thread-archived"),
+          archivedAt: "2026-03-20T00:00:00.000Z",
+          pinnedAt: "2026-03-20T00:00:00.000Z",
+        }),
+        makeThreadShell({
+          id: ThreadId.make("thread-snoozed"),
+          snoozedAt: "2026-03-24T00:00:00.000Z",
+          snoozedUntil: "2026-03-26T00:00:00.000Z",
+          latestUserMessageAt: null,
+        }),
+        makeThreadShell({
+          id: ThreadId.make("thread-settled"),
+          settledOverride: "settled",
+          settledAt: "2026-03-24T00:00:00.000Z",
+        }),
+        makeThreadShell({
+          id: ThreadId.make("thread-auto-settled"),
+          latestUserMessageAt: "2026-03-20T00:00:00.000Z",
+        }),
+      ],
+      snoozeNow: "2026-03-25T12:34:56.000Z",
+      settlementNow: "2026-03-25T12:34:00.000Z",
+      autoSettleAfterDays: 3,
+      supportsSettlement: () => true,
+      supportsSnooze: () => true,
+    });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-active"),
+      ThreadId.make("thread-pinned"),
+    ]);
+  });
+
+  it("does not hide lifecycle states unsupported by an older environment", () => {
+    const threads = filterOpenCommandPaletteThreads({
+      threads: [
+        makeThreadShell({
+          id: ThreadId.make("thread-legacy"),
+          settledOverride: "settled",
+          settledAt: "2026-03-24T00:00:00.000Z",
+          snoozedUntil: "2026-03-26T00:00:00.000Z",
+        }),
+      ],
+      snoozeNow: "2026-03-25T12:34:56.000Z",
+      settlementNow: "2026-03-25T12:34:00.000Z",
+      autoSettleAfterDays: 3,
+      supportsSettlement: () => false,
+      supportsSnooze: () => false,
+    });
+
+    expect(threads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-legacy")]);
+  });
+});
+
+describe("buildRootGroups", () => {
+  it("builds a focused new-thread and open-threads root", () => {
+    const newThreadItem = {
+      kind: "action" as const,
+      value: "action:new-thread",
+      searchTerms: ["new thread"],
+      title: "New thread",
+      icon: null,
+      run: async () => undefined,
+    };
+    const openThreadItem = {
+      kind: "action" as const,
+      value: "thread:open",
+      searchTerms: ["Open thread"],
+      title: "Open thread",
+      icon: null,
+      run: async () => undefined,
+    };
+
+    expect(
+      buildRootGroups({ actionItems: [newThreadItem], openThreadItems: [openThreadItem] }),
+    ).toEqual([
+      { value: "actions", label: "Actions", items: [newThreadItem] },
+      { value: "open-threads", label: "Open Threads", items: [openThreadItem] },
+    ]);
+  });
+
+  it("searches the open-thread collection once without restoring other root results", () => {
+    const newThreadItem = {
+      kind: "action" as const,
+      value: "action:new-thread",
+      searchTerms: ["new thread"],
+      title: "New thread",
+      icon: null,
+      run: async () => undefined,
+    };
+    const openThreadItem = {
+      kind: "action" as const,
+      value: "thread:open",
+      searchTerms: ["Open thread"],
+      title: "Open thread",
+      icon: null,
+      run: async () => undefined,
+    };
+    const rootGroups = buildRootGroups({
+      actionItems: [newThreadItem],
+      openThreadItems: [openThreadItem],
+    });
+
+    expect(
+      filterCommandPaletteGroups({
+        activeGroups: rootGroups,
+        query: "open",
+        isInSubmenu: false,
+        threadSearchItems: [openThreadItem],
+      }),
+    ).toEqual([{ value: "threads-search", label: "Open Threads", items: [openThreadItem] }]);
+  });
+});
+
 describe("buildThreadActionItems", () => {
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {
     vi.useFakeTimers();
@@ -200,7 +355,6 @@ describe("buildThreadActionItems", () => {
       activeGroups: [],
       query: "project",
       isInSubmenu: false,
-      projectSearchItems: [],
       threadSearchItems: threadItems,
     });
 
@@ -233,7 +387,6 @@ describe("buildThreadActionItems", () => {
       activeGroups: [group],
       query: "project",
       isInSubmenu: false,
-      projectSearchItems: [],
       threadSearchItems: [],
     });
 
